@@ -32,7 +32,7 @@ No email goes to multiple people at once. Every send is individual.
 
 ## Requirements
 
-- Python 3.14 or above — check with `python --version` in your terminal
+- Python 3.8 or above — check with `python --version` in your terminal
 - Git already installed in your PC
 - A Gmail account with 2-Step Verification turned ON
 - Internet connection
