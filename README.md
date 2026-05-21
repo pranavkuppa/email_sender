@@ -33,6 +33,7 @@ No email goes to multiple people at once. Every send is individual.
 ## Requirements
 
 - Python 3.14 or above — check with `python --version` in your terminal
+- Git already installed in your PC
 - A Gmail account with 2-Step Verification turned ON
 - Internet connection
 
@@ -43,7 +44,7 @@ No email goes to multiple people at once. Every send is individual.
 ### Step 1 — Clone the repository
 ```bash
 git clone https://github.com/PranavKuppa/Email_Sender.git
-cd Email-Sender
+cd Email_Sender
 ```
 
 ### Step 2 — Install dependencies
@@ -70,9 +71,10 @@ If `pip` doesn't work, try `pip3` instead.
 
 ```bash
 cp .env.example .env
+code .
 ```
 
-Now open `.env` in any text editor and fill in your values:
+Now open `.env` and fill in your values:
 
 ```
 SENDER_EMAIL=your_actual_gmail@gmail.com
@@ -81,7 +83,7 @@ SENDER_PASS=abcd efgh ijkl mnop        ← the 16-char App Password, spaces incl
 
 > ⚠️ The `.env` file is already in `.gitignore`. Never remove it from there.
 
-### Step 5 — Prepare your student CSV
+### Step 5 — Prepare your CSV
 
 
 Add your CSV into the folder. Rules:
@@ -104,8 +106,6 @@ just make sure it matches what you set in `placeholders.json` next.
 
 Example - 
 ```
-Subject: {{subject}}
-
 Hi {{name}},
 
 Your exam for {{course}} is on {{date}}.
@@ -120,16 +120,14 @@ Admin Team
 Open `placeholders.json`. This file tells the script what to replace in your template
 and which CSV column to pull the value from.
 Add all the placeholders under placeholders in the same format shown.
-Example - 
+Example - (You can copy this and edit)
 ```json
 {
     "placeholders": {
         "{{name}}":   "name",
         "{{course}}": "course",
         "{{date}}":   "exam_date"
-    },
-    "default_subject": "Important Exam Reminder",
-    "subject_placeholder": "{{subject}}"
+    }
 }
 ```
 
