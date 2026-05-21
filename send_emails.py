@@ -18,9 +18,11 @@ SMTP_PORT = 587
 SENDER_EMAIL = os.getenv("SENDER_EMAIL")
 SENDER_PASS = os.getenv("SENDER_PASS")
 
-CSV_FILE = os.getenv("CSV_FILE", "students.csv")
+CSV_FILE = os.getenv("CSV_FILE")
 TEMPLATE_FILE = os.getenv("TEMPLATE_FILE", "email_template.txt")
 PLACEHOLDER_FILE = os.getenv("PLACEHOLDER_FILE", "placeholders.json")
+
+EMAIL_SUBJECT = os.getenv("EMAIL_SUBJECT", "No Subject")
 
 DELAY_BETWEEN_EMAILS = float(os.getenv("DELAY_BETWEEN_EMAILS", 1.5))
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", 50))
@@ -125,36 +127,20 @@ def load_students():
 
 
 def build_email(template, row, config):
-    """
-    Replace all placeholders in the template with values from the CSV row.
-    Returns (subject, body) as a tuple.
-    """
     body = template
 
     for placeholder, col_name in config["placeholders"].items():
         if col_name in row and pd.notna(row[col_name]):
             value = str(row[col_name])
         else:
-            value = ""   # leave blank if column missing or empty
+            value = ""
             logging.warning(
                 f"Placeholder '{placeholder}' → column '{col_name}' "
                 f"not found or empty for {row.get('email', 'unknown')}."
             )
         body = body.replace(placeholder, value)
 
-    # Extract subject from the first "Subject: ..." line
-    subject = config.get("default_subject", "No Subject")
-    lines = body.split("\n")
-    body_lines = []
-
-    for line in lines:
-        if line.lower().startswith("subject:"):
-            subject = line[len("subject:"):].strip()
-        else:
-            body_lines.append(line)
-
-    body = "\n".join(body_lines).strip()
-    return subject, body
+    return body
 
 
 def send_email(smtp, to_email, subject, body):
@@ -210,17 +196,17 @@ def main(dry_run=False):
         to_email = str(row["email"]).strip()
 
         try:
-            subject, body = build_email(template, row, config)
+            body = build_email(template, row, config)
 
             if dry_run:
                 print(f"--- Email {i + 1} of {len(students)} ---")
                 print(f"TO:      {to_email}")
-                print(f"SUBJECT: {subject}")
+                print(f"SUBJECT: {EMAIL_SUBJECT}")
                 print(f"BODY:\n{body}")
                 print()
 
             else:
-                send_email(smtp, to_email, subject, body)
+                send_email(smtp, to_email, EMAIL_SUBJECT, body)
                 results.append({
                     "email":  to_email,
                     "status": "sent",

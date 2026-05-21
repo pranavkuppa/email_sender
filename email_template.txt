@@ -1,5 +1,3 @@
-Subject: {{subject}}
-
 Hi {{name}},
 
 Your exam for {{course}} is on {{date}}.
