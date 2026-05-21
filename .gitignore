@@ -5,7 +5,7 @@
 logs/
 
 # Your personal test data
-students.csv
+*.csv
 
 # Python cache
 __pycache__/
