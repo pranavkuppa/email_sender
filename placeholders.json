@@ -1,0 +1,9 @@
+{
+    "placeholders": {
+        "{{name}}": "name",
+        "{{course}}": "course",
+        "{{date}}": "exam_date"
+    },
+    "subject_placeholder": "{{subject}}",
+    "default_subject": "XXX"
+}
