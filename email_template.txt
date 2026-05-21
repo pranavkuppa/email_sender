@@ -1,0 +1,17 @@
+Paste your email template here...sample format is shown\
+
+Subject: {{subject}}
+
+Hi {{name}},
+
+Your exam for {{course}} is scheduled on {{date}}.
+Please bring your ID card and hall ticket.
+
+Regards,
+Admin Team
+
+
+all values that are to be taken from the excel sheet are enclosed in {{--}}
+Delete this sample email before saving
+
+-----PASTE YOUR EMAIL HERE----------
