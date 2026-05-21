@@ -198,19 +198,26 @@ def main(dry_run=False):
         try:
             body = build_email(template, row, config)
 
+            # Resolve any {{placeholders}} in the subject for this recipient
+            subject = EMAIL_SUBJECT
+            for placeholder, col_name in config["placeholders"].items():
+                if col_name in row and pd.notna(row[col_name]):
+                    subject = subject.replace(placeholder, str(row[col_name]))
+
             if dry_run:
                 print(f"--- Email {i + 1} of {len(students)} ---")
                 print(f"TO:      {to_email}")
-                print(f"SUBJECT: {EMAIL_SUBJECT}")
+                print(f"SUBJECT: {subject}")
                 print(f"BODY:\n{body}")
                 print()
 
             else:
-                send_email(smtp, to_email, EMAIL_SUBJECT, body)
+                send_email(smtp, to_email, subject, body)
                 results.append({
-                    "email":  to_email,
-                    "status": "sent",
-                    "error":  ""
+                    "email":   to_email,
+                    "subject": subject,
+                    "status":  "sent",
+                    "error":   ""
                 })
                 logging.info(f"[{i + 1}/{len(students)}] Sent → {to_email}")
 

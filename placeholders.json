@@ -1,0 +1,7 @@
+{
+    "placeholders": {
+        "{{name}}": "name",
+        "{{course}}": "course",
+        "{{date}}": "exam_date"
+    }
+}

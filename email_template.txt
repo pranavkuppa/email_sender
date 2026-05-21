@@ -1,0 +1,7 @@
+Hi {{name}},
+
+Your exam for {{course}} is on {{date}}.
+Please carry your ID card.
+
+Regards,
+Admin Team
