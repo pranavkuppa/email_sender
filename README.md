@@ -42,8 +42,8 @@ No email goes to multiple people at once. Every send is individual.
 
 ### Step 1 — Clone the repository
 ```bash
-git clone https://github.com/yourname/email-sender.git
-cd email-sender
+git clone https://github.com/PranavKuppa/Email_Sender.git
+cd Email-Sender
 ```
 
 ### Step 2 — Install dependencies
