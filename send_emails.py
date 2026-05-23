@@ -9,6 +9,7 @@ import os
 import argparse
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.utils import parseaddr
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -109,19 +110,19 @@ def load_students():
     df = pd.read_csv(CSV_FILE)
 
     # Check that the email column exists
-    if "email" not in df.columns:
+    if "Email" not in df.columns:
         raise KeyError(
-            "Your CSV must have a column named exactly 'email' (lowercase). "
+            "Your CSV must have a column named exactly 'Email' (case-sensitive). "
             f"Columns found: {list(df.columns)}"
         )
 
     original_count = len(df)
 
     # Drop rows with no email
-    df.dropna(subset=["email"], inplace=True)
+    df.dropna(subset=["Email"], inplace=True)
 
     # Drop duplicate emails
-    df.drop_duplicates(subset=["email"], inplace=True)
+    df.drop_duplicates(subset=["Email"], inplace=True)
 
     dropped = original_count - len(df)
     if dropped > 0:
@@ -154,18 +155,22 @@ def build_email(template, row, config):
     return body
 
 
-def send_email(smtp, to_email, subject, body):
-    """Send a single email via the open SMTP connection."""
+def send_email(smtp, to_email, subject, body, cc=""):
+    """Send a single email via the open SMTP connection.
+    """
     msg = MIMEMultipart()
     msg["From"] = SENDER_EMAIL
     msg["To"] = to_email
     msg["Subject"] = subject
-    if CC_EMAIL:
-        msg["Cc"] = CC_EMAIL
+    if cc:
+        msg["Cc"] = cc   # full "Name <email>" string goes in header
     msg.attach(MIMEText(body, "plain"))
-    recipients = [to_email] + ([CC_EMAIL] if CC_EMAIL else [])
+
+    # smtp.sendmail needs bare email addresses only, not "Name <email>"
+    _, cc_addr = parseaddr(cc)   # extracts just the email; "" if cc is empty
+    recipients = [to_email] + ([cc_addr] if cc_addr else [])
     smtp.sendmail(SENDER_EMAIL, recipients, msg.as_string())
-    return msg
+    return msg   # return so save_to_sent can reuse the same object
 
 
 def save_to_sent(msg):
@@ -233,7 +238,7 @@ def main(dry_run=False):
 
     # Step 4 — loop through students
     for i, (_, row) in enumerate(students.iterrows()):
-        to_email = str(row["email"]).strip()
+        to_email = str(row["Email"]).strip()
 
         try:
             body = build_email(template, row, config)
@@ -244,17 +249,22 @@ def main(dry_run=False):
                 if col_name in row and pd.notna(row[col_name]):
                     subject = subject.replace(placeholder, str(row[col_name]))
 
+            cc = CC_EMAIL
+            for placeholder, col_name in config["placeholders"].items():
+                if col_name in row and pd.notna(row[col_name]):
+                    cc = cc.replace(placeholder, str(row[col_name]))
+
             if dry_run:
                 print(f"--- Email {i + 1} of {len(students)} ---")
                 print(f"TO:      {to_email}")
-                if CC_EMAIL:
-                    print(f"CC:      {CC_EMAIL}")
+                if cc:
+                    print(f"CC:      {cc}")
                 print(f"SUBJECT: {subject}")
                 print(f"BODY:\n{body}")
                 print()
 
             else:
-                msg = send_email(smtp, to_email, subject, body)
+                msg = send_email(smtp, to_email, subject, body, cc=cc)
                 save_to_sent(msg)
                 results.append({
                     "email":   to_email,
