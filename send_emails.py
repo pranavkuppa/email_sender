@@ -1,4 +1,6 @@
+import imaplib
 import smtplib
+import ssl
 import pandas as pd
 import json
 import logging
@@ -13,10 +15,19 @@ from dotenv import load_dotenv
 # ─── LOAD ENVIRONMENT VARIABLES ───────────────────────────
 load_dotenv()
 
-SMTP_HOST = "smtp.gmail.com"
-SMTP_PORT = 587
+SMTP_HOST = os.getenv("SMTP_HOST")
+SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
 SENDER_EMAIL = os.getenv("SENDER_EMAIL")
 SENDER_PASS = os.getenv("SENDER_PASS")
+CC_EMAIL = os.getenv("CC_EMAIL", "").strip()
+
+# IMAP — optional. Set these to save sent emails to your Sent folder.
+# Gmail does this automatically, so leave blank for Gmail.
+# Required for FatCow / cPanel / any host that doesn't auto-save sent mail.
+IMAP_HOST = os.getenv("IMAP_HOST", "").strip()
+IMAP_PORT = int(os.getenv("IMAP_PORT", 993))
+IMAP_SENT_FOLDER = os.getenv("IMAP_SENT_FOLDER", "Sent")
+
 
 CSV_FILE = os.getenv("CSV_FILE")
 TEMPLATE_FILE = os.getenv("TEMPLATE_FILE", "email_template.txt")
@@ -92,7 +103,7 @@ def load_students():
     if not os.path.exists(CSV_FILE):
         raise FileNotFoundError(
             f"CSV file '{CSV_FILE}' not found. "
-            f"Copy students.example.csv → students.csv and fill your data."
+            f"Check CSV_FILE in your .env file."
         )
 
     df = pd.read_csv(CSV_FILE)
@@ -149,8 +160,36 @@ def send_email(smtp, to_email, subject, body):
     msg["From"] = SENDER_EMAIL
     msg["To"] = to_email
     msg["Subject"] = subject
+    if CC_EMAIL:
+        msg["Cc"] = CC_EMAIL
     msg.attach(MIMEText(body, "plain"))
-    smtp.sendmail(SENDER_EMAIL, to_email, msg.as_string())
+    recipients = [to_email] + ([CC_EMAIL] if CC_EMAIL else [])
+    smtp.sendmail(SENDER_EMAIL, recipients, msg.as_string())
+    return msg
+
+
+def save_to_sent(msg):
+    """
+    Append the sent message to the IMAP Sent folder.
+    Only runs if IMAP_HOST is set in .env — silently skipped otherwise.
+    Gmail users: leave IMAP_HOST blank, Gmail saves sent mail automatically.
+    FatCow / cPanel users: set IMAP_HOST=mail.fatcow.com (or your mail host).
+    """
+    if not IMAP_HOST:
+        return  # not configured — skip silently
+
+    try:
+        imap = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+        imap.login(SENDER_EMAIL, SENDER_PASS)
+
+        # imaplib.append() needs the raw message bytes
+        raw = msg.as_bytes()
+        imap.append(IMAP_SENT_FOLDER, "\\Seen",
+                    imaplib.Time2Internaldate(time.time()), raw)
+        imap.logout()
+    except Exception as e:
+        # Non-fatal — email was already sent, just log the warning
+        logging.warning(f"Could not save to Sent folder: {e}")
 
 
 def main(dry_run=False):
@@ -177,18 +216,19 @@ def main(dry_run=False):
     smtp = None
     if not dry_run:
         try:
-            logging.info("Connecting to Gmail SMTP...")
+            logging.info(f"Connecting to {SMTP_HOST}:{SMTP_PORT}...")
             smtp = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
+            context = ssl._create_unverified_context()
             smtp.ehlo()
-            smtp.starttls()
+            smtp.starttls(context=context)
             smtp.login(SENDER_EMAIL, SENDER_PASS)
-            logging.info("Logged into Gmail SMTP ✓")
+            logging.info(f"Logged into {SMTP_HOST} ✓")
         except smtplib.SMTPAuthenticationError:
             raise SystemExit(
                 "\nAuthentication failed. Make sure:\n"
                 "  1. SENDER_EMAIL and SENDER_PASS are correct in .env\n"
-                "  2. SENDER_PASS is your App Password (not your Gmail password)\n"
-                "  3. 2-Step Verification is ON in your Google account\n"
+                "  2. SENDER_PASS is the correct Password(App Password for Gmail)\n"
+                "  3. 2-Step Verification is ON in your Google account(For Gmail users only)\n"
             )
 
     # Step 4 — loop through students
@@ -207,12 +247,15 @@ def main(dry_run=False):
             if dry_run:
                 print(f"--- Email {i + 1} of {len(students)} ---")
                 print(f"TO:      {to_email}")
+                if CC_EMAIL:
+                    print(f"CC:      {CC_EMAIL}")
                 print(f"SUBJECT: {subject}")
                 print(f"BODY:\n{body}")
                 print()
 
             else:
-                send_email(smtp, to_email, subject, body)
+                msg = send_email(smtp, to_email, subject, body)
+                save_to_sent(msg)
                 results.append({
                     "email":   to_email,
                     "subject": subject,
@@ -227,7 +270,7 @@ def main(dry_run=False):
                 if (i + 1) % BATCH_SIZE == 0:
                     logging.info(
                         f"Batch of {BATCH_SIZE} sent. "
-                        f"Pausing {BATCH_PAUSE}s to avoid Gmail rate limits..."
+                        f"Pausing {BATCH_PAUSE}s to avoid {SMTP_HOST} rate limits..."
                     )
                     time.sleep(BATCH_PAUSE)
 
@@ -272,7 +315,7 @@ def main(dry_run=False):
 # ─── ENTRY POINT ──────────────────────────────────────────
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Bulk personalized email sender using Gmail SMTP."
+        description="Bulk personalized email sender using {SMTP_HOST} SMTP."
     )
     parser.add_argument(
         "--dry-run",
