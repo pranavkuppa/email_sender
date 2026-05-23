@@ -9,7 +9,7 @@ import os
 import argparse
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from email.utils import parseaddr
+from email.utils import parseaddr, formataddr
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -20,7 +20,11 @@ SMTP_HOST = os.getenv("SMTP_HOST")
 SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
 SENDER_EMAIL = os.getenv("SENDER_EMAIL")
 SENDER_PASS = os.getenv("SENDER_PASS")
+
+# from CSV via placeholders
 CC_EMAIL = os.getenv("CC_EMAIL", "").strip()
+# fixed address, always CC'd
+CC_DEFAULT = os.getenv("CC_DEFAULT", "").strip()
 
 # IMAP — optional. Set these to save sent emails to your Sent folder.
 # Gmail does this automatically, so leave blank for Gmail.
@@ -28,7 +32,6 @@ CC_EMAIL = os.getenv("CC_EMAIL", "").strip()
 IMAP_HOST = os.getenv("IMAP_HOST", "").strip()
 IMAP_PORT = int(os.getenv("IMAP_PORT", 993))
 IMAP_SENT_FOLDER = os.getenv("IMAP_SENT_FOLDER", "Sent")
-
 
 CSV_FILE = os.getenv("CSV_FILE")
 TEMPLATE_FILE = os.getenv("TEMPLATE_FILE", "email_template.txt")
@@ -109,19 +112,14 @@ def load_students():
 
     df = pd.read_csv(CSV_FILE)
 
-    # Check that the email column exists
     if "Email" not in df.columns:
         raise KeyError(
-            "Your CSV must have a column named exactly 'Email' (case-sensitive). "
+            "Your CSV must have a column named exactly 'Email'. "
             f"Columns found: {list(df.columns)}"
         )
 
     original_count = len(df)
-
-    # Drop rows with no email
     df.dropna(subset=["Email"], inplace=True)
-
-    # Drop duplicate emails
     df.drop_duplicates(subset=["Email"], inplace=True)
 
     dropped = original_count - len(df)
@@ -140,7 +138,6 @@ def load_students():
 
 def build_email(template, row, config):
     body = template
-
     for placeholder, col_name in config["placeholders"].items():
         if col_name in row and pd.notna(row[col_name]):
             value = str(row[col_name])
@@ -151,50 +148,118 @@ def build_email(template, row, config):
                 f"not found or empty for {row.get('email', 'unknown')}."
             )
         body = body.replace(placeholder, value)
-
     return body
 
 
-def send_email(smtp, to_email, subject, body, cc=""):
-    """Send a single email via the open SMTP connection.
+def encode_cc(cc_str):
+    """
+    Parse a resolved CC string like 'Dr. Rahul Sharma <hod@school.com>'
+    and re-encode it properly so the display name is RFC-quoted.
+    Returns (formatted_header_string, bare_email_address).
+    If cc_str is empty or has no valid email, returns ("", "").
+    """
+    if not cc_str:
+        return "", ""
+    name, addr = parseaddr(cc_str)
+    if not addr:
+        return "", ""
+    # formataddr re-encodes name safely (quotes dots, commas, special chars)
+    return formataddr((name, addr)), addr
+
+
+def send_email(smtp, to_email, subject, body, cc="", cc_default=""):
+    """
+    Send a single email via the open SMTP connection.
+
+    cc         — resolved per-recipient CC (from CSV placeholders)
+    cc_default — fixed CC address always included (from CC_DEFAULT in .env)
+
+    Both support 'Name <email>' format or plain email.
+    Both are properly encoded before being placed in the Cc header.
+    Both bare addresses are passed to smtp.sendmail so delivery actually happens.
     """
     msg = MIMEMultipart()
     msg["From"] = SENDER_EMAIL
     msg["To"] = to_email
     msg["Subject"] = subject
-    if cc:
-        msg["Cc"] = cc   # full "Name <email>" string goes in header
+
+    # Encode each CC entry properly (handles display names with dots/spaces/etc)
+    cc_header, cc_addr = encode_cc(cc)
+    cc_def_header, cc_def_addr = encode_cc(cc_default)
+
+    # Build combined Cc header — only include non-empty entries
+    cc_parts = [h for h in [cc_header, cc_def_header] if h]
+    if cc_parts:
+        msg["Cc"] = ", ".join(cc_parts)
+
     msg.attach(MIMEText(body, "plain"))
 
-    # smtp.sendmail needs bare email addresses only, not "Name <email>"
-    _, cc_addr = parseaddr(cc)   # extracts just the email; "" if cc is empty
-    recipients = [to_email] + ([cc_addr] if cc_addr else [])
+    # smtp.sendmail envelope must list all actual recipient addresses
+    # (bare emails only — no display names)
+    extra_recipients = [a for a in [cc_addr, cc_def_addr] if a]
+    recipients = [to_email] + extra_recipients
     smtp.sendmail(SENDER_EMAIL, recipients, msg.as_string())
-    return msg   # return so save_to_sent can reuse the same object
+    return msg   # returned so save_to_sent can reuse the same object
 
 
 def save_to_sent(msg):
     """
     Append the sent message to the IMAP Sent folder.
     Only runs if IMAP_HOST is set in .env — silently skipped otherwise.
-    Gmail users: leave IMAP_HOST blank, Gmail saves sent mail automatically.
-    FatCow / cPanel users: set IMAP_HOST=mail.fatcow.com (or your mail host).
+
+    Tries multiple folder name candidates in order so it works across
+    Gmail, FatCow, cPanel, and other hosts without manual trial-and-error.
     """
     if not IMAP_HOST:
-        return  # not configured — skip silently
+        return
+
+    # Candidate folder names tried in order — covers most hosts
+    # IMAP_SENT_FOLDER from .env is always tried first
+    candidates = [
+        IMAP_SENT_FOLDER,
+        "Sent",
+        "INBOX.Sent",
+        "Sent Items",
+        "INBOX.Sent Items",
+    ]
+    # Remove duplicates while keeping order
+    seen = set()
+    candidates = [x for x in candidates if not (x in seen or seen.add(x))]
 
     try:
         imap = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
         imap.login(SENDER_EMAIL, SENDER_PASS)
 
-        # imaplib.append() needs the raw message bytes
+        folder_used = None
+        for folder in candidates:
+            # Quote folder name to handle spaces (e.g. "Sent Items")
+            typ, _ = imap.select(f'"{folder}"')
+            if typ == "OK":
+                folder_used = folder
+                break
+
+        if not folder_used:
+            logging.warning(
+                f"IMAP: could not find Sent folder on {IMAP_HOST}. "
+                f"Tried: {candidates}. "
+                f"Check IMAP_SENT_FOLDER in your .env."
+            )
+            imap.logout()
+            return
+
         raw = msg.as_bytes()
-        imap.append(IMAP_SENT_FOLDER, "\\Seen",
-                    imaplib.Time2Internaldate(time.time()), raw)
+        imap.append(
+            f'"{folder_used}"',
+            "\\Seen",
+            imaplib.Time2Internaldate(time.time()),
+            raw
+        )
         imap.logout()
+        logging.info(f"Saved to Sent folder: '{folder_used}'")
+
     except Exception as e:
-        # Non-fatal — email was already sent, just log the warning
-        logging.warning(f"Could not save to Sent folder: {e}")
+        # Non-fatal — email was already sent, log clearly so user knows
+        logging.warning(f"Could not save to Sent folder ({IMAP_HOST}): {e}")
 
 
 def main(dry_run=False):
@@ -217,7 +282,7 @@ def main(dry_run=False):
 
     results = []
 
-    # Step 3 — connect to Gmail (only for real runs)
+    # Step 3 — connect to SMTP (only for real runs)
     smtp = None
     if not dry_run:
         try:
@@ -232,8 +297,8 @@ def main(dry_run=False):
             raise SystemExit(
                 "\nAuthentication failed. Make sure:\n"
                 "  1. SENDER_EMAIL and SENDER_PASS are correct in .env\n"
-                "  2. SENDER_PASS is the correct Password(App Password for Gmail)\n"
-                "  3. 2-Step Verification is ON in your Google account(For Gmail users only)\n"
+                "  2. SENDER_PASS is the correct Password (App Password for Gmail)\n"
+                "  3. 2-Step Verification is ON in your Google account (Gmail only)\n"
             )
 
     # Step 4 — loop through students
@@ -243,28 +308,38 @@ def main(dry_run=False):
         try:
             body = build_email(template, row, config)
 
-            # Resolve any {{placeholders}} in the subject for this recipient
+            # Resolve {{placeholders}} in subject
             subject = EMAIL_SUBJECT
             for placeholder, col_name in config["placeholders"].items():
                 if col_name in row and pd.notna(row[col_name]):
                     subject = subject.replace(placeholder, str(row[col_name]))
 
+            # Resolve {{placeholders}} in CC_EMAIL (per-recipient, from CSV)
             cc = CC_EMAIL
             for placeholder, col_name in config["placeholders"].items():
                 if col_name in row and pd.notna(row[col_name]):
                     cc = cc.replace(placeholder, str(row[col_name]))
 
+            # CC_DEFAULT needs no placeholder resolution — it's always fixed
+            cc_default = CC_DEFAULT
+
             if dry_run:
+                # Show both CC addresses in preview so user can verify
+                _, cc_addr = encode_cc(cc)
+                _, cc_def_addr = encode_cc(cc_default)
                 print(f"--- Email {i + 1} of {len(students)} ---")
                 print(f"TO:      {to_email}")
                 if cc:
                     print(f"CC:      {cc}")
+                if cc_default:
+                    print(f"CC (default): {cc_default}")
                 print(f"SUBJECT: {subject}")
                 print(f"BODY:\n{body}")
                 print()
 
             else:
-                msg = send_email(smtp, to_email, subject, body, cc=cc)
+                msg = send_email(smtp, to_email, subject, body,
+                                 cc=cc, cc_default=cc_default)
                 save_to_sent(msg)
                 results.append({
                     "email":   to_email,
@@ -276,7 +351,6 @@ def main(dry_run=False):
 
                 time.sleep(DELAY_BETWEEN_EMAILS)
 
-                # Batch pause every N emails
                 if (i + 1) % BATCH_SIZE == 0:
                     logging.info(
                         f"Batch of {BATCH_SIZE} sent. "
